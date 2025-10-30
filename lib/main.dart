@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // NECESARIO para Firestore
 
 // Constantes simples
 const Color kPrimaryColor = Colors.blue;
@@ -9,12 +10,13 @@ const Color kPrimaryColor = Colors.blue;
 // --- 1. Inicialización de Firebase ---
 
 void main() async {
+  // Asegurar la inicialización antes de llamar a Firebase
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    // Inicializa Firebase
     await Firebase.initializeApp();
   } catch (e) {
+    // Si la inicialización falla (generalmente por falta de google-services.json)
     print('Firebase Initialization Error: $e');
   }
 
@@ -27,13 +29,31 @@ class SimpleAuthApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Simple Auth Test',
+      title: 'Autenticación Google Firestore',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
-      // AuthWrapper maneja si mostrar la pantalla de Login o Home.
       home: const AuthWrapper(),
     );
   }
+}
+
+// --- FUNCIÓN DE GUARDADO EN FIRESTORE ---
+
+// Función para guardar o actualizar el perfil de usuario en Firestore
+Future<void> _saveUserToFirestore(User user) async {
+  final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+
+  // Datos a guardar (se usa FieldValue.serverTimestamp() para la fecha)
+  final userData = {
+    'uid': user.uid,
+    'email': user.email,
+    'displayName': user.displayName,
+    'photoURL': user.photoURL,
+    'lastLogin': FieldValue.serverTimestamp(),
+  };
+
+  // Usar set con merge: true para no sobrescribir otros campos si el documento ya existe
+  await userDoc.set(userData, SetOptions(merge: true));
 }
 
 // --- 2. WIDGET ENVOLTORIO DE AUTENTICACIÓN ---
@@ -43,7 +63,6 @@ class AuthWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // StreamBuilder escucha los cambios en el estado de autenticación.
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
@@ -56,11 +75,9 @@ class AuthWrapper extends StatelessWidget {
         final user = snapshot.data;
 
         if (user != null) {
-          // Si hay usuario, muestra la pantalla de inicio (Home).
           return HomeScreen(user: user);
         }
 
-        // Si no hay usuario, muestra la pantalla de inicio de sesión (Login).
         return const LoginScreen();
       },
     );
@@ -105,19 +122,28 @@ class _LoginScreenState extends State<LoginScreen> {
         idToken: googleAuth.idToken,
       );
 
-      // Inicia sesión en Firebase
-      await FirebaseAuth.instance.signInWithCredential(credential);
+      // 1. Inicia sesión en Firebase
+      final userCredential = await FirebaseAuth.instance.signInWithCredential(
+        credential,
+      );
+
+      // 2. Guarda el perfil en Firestore inmediatamente después del éxito
+      if (userCredential.user != null) {
+        await _saveUserToFirestore(userCredential.user!);
+      }
     } on FirebaseAuthException catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = 'Error de Auth: ${e.message}';
+          // Si falló, puede ser por un problema de SHA-1 o reglas de Google.
+          _errorMessage =
+              'Error de Auth: Asegúrate de que el SHA-1 está registrado y las reglas de Firebase están correctas. ${e.message}';
         });
       }
       print('Auth Error: $e');
     } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = 'Error: $e';
+          _errorMessage = 'Error inesperado: $e';
         });
       }
       print('General Error: $e');
@@ -134,7 +160,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Autenticación de Google (Simple)'),
+        title: const Text('Autenticación de Google (Firestore)'),
         backgroundColor: kPrimaryColor,
         foregroundColor: Colors.white,
       ),
@@ -145,7 +171,7 @@ class _LoginScreenState extends State<LoginScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
               const Text(
-                'Inicia sesión para probar la autenticación.',
+                'Inicia sesión para guardar tu perfil en Firestore.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 18, color: Colors.black54),
               ),
@@ -249,7 +275,7 @@ class HomeScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               const Text(
-                'Sesión Iniciada Correctamente',
+                'Perfil guardado en Firestore',
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
